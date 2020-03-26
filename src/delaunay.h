@@ -60,4 +60,5 @@ class Splitter {
     static Disk circumcenter(Vector2 v1, Vector2 v2, Vector2 v3);
     std::vector<double> edgePoints(Edge e);
     std::array<Vector2, 8> layOutButterfly(Edge e);
+    std::array<Vector2, 5> layOutCroissant(Edge e);
 };

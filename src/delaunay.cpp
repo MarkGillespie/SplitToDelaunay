@@ -63,6 +63,7 @@ std::vector<Edge> Splitter::flipFlatEdgesToDelaunay(std::set<Edge> edges) {
     std::vector<Edge> brokenEdges;
     EdgeData<char> inReturnList(geo.mesh, false);
 
+    my_assert(geo.mesh.isTriangular(), "Mesh not triangle");
     while (!edgesToCheck.empty()) {
 
         // Get the top element from the queue of possibily non-Delaunay edges
@@ -96,25 +97,28 @@ std::vector<Edge> Splitter::flipFlatEdgesToDelaunay(std::set<Edge> edges) {
             }
         }
     }
-    geo.refreshQuantities();
+    my_assert(geo.mesh.isTriangular(), "Mesh not triangle");
+
+    // geo.refreshQuantities();
+
     return brokenEdges;
 }
 
 void Splitter::splitGeometry(bool verbose) {
     Halfedge newHe1, newHe2;
 
-    std::vector<Vector3> samplePositions;
-    edgeSamplePoints = EdgeData<std::vector<double>>(geo.mesh);
-    for (Edge e : geo.mesh.edges()) {
-        edgeSamplePoints[e] = edgePoints(e);
-        geo.requireVertexPositions();
-        Vector3 p = geo.vertexPositions[e.halfedge().vertex()];
-        Vector3 q = geo.vertexPositions[e.halfedge().twin().vertex()];
-        double l  = (p - q).norm();
-        for (double d : edgeSamplePoints[e]) {
-            samplePositions.push_back(p * (d / l) + q * (1 - d / l));
-        }
-    }
+    // std::vector<Vector3> samplePositions;
+    // edgeSamplePoints = EdgeData<std::vector<double>>(geo.mesh);
+    // for (Edge e : geo.mesh.edges()) {
+    //     edgeSamplePoints[e] = edgePoints(e);
+    //     geo.requireVertexPositions();
+    //     Vector3 p = geo.vertexPositions[e.halfedge().vertex()];
+    //     Vector3 q = geo.vertexPositions[e.halfedge().twin().vertex()];
+    //     double l  = (p - q).norm();
+    //     for (double d : edgeSamplePoints[e]) {
+    //         samplePositions.push_back(p * (d / l) + q * (1 - d / l));
+    //     }
+    // }
 
     EdgeData<size_t> eIdx = geo.mesh.getEdgeIndices();
 
@@ -148,7 +152,8 @@ void Splitter::splitGeometry(bool verbose) {
         edgesToCheck.pop_front();
         inQueue[e] = false;
 
-        if (!edgeSamplePoints[e].empty() && !isDelaunay(e)) {
+        // if (!edgeSamplePoints[e].empty() && !isDelaunay(e)) {
+        if (!isDelaunay(e)) {
             size_t faceIndex     = originalFaceIndices[e.halfedge()];
             size_t faceIndexTwin = originalFaceIndices[e.halfedge().twin()];
 
@@ -202,15 +207,17 @@ void Splitter::splitGeometry(bool verbose) {
         if (!printedFlat && flatEdge[e] && !isDelaunay(e)) {
             cout << "Edge " << eIdx[e] << " is not Delaunay" << endl;
             cout << "It is " << (flatEdge[e] ? "" : "not ") << "flat" << endl;
-            cout << "It has " << (edgeSamplePoints[e].empty() ? "no " : "some ")
-                 << "sample points" << endl;
+            // cout << "It has " << (edgeSamplePoints[e].empty() ? "no " : "some
+            // ")
+            //      << "sample points" << endl;
             printedFlat = true;
         }
         if (!printedEssential && !flatEdge[e] && !isDelaunay(e)) {
             cout << "Edge " << eIdx[e] << " is not Delaunay" << endl;
             cout << "It is " << (flatEdge[e] ? "" : "not ") << "flat" << endl;
-            cout << "It has " << (edgeSamplePoints[e].empty() ? "no " : "some ")
-                 << "sample points" << endl;
+            // cout << "It has " << (edgeSamplePoints[e].empty() ? "no " : "some
+            // ")
+            //      << "sample points" << endl;
             printedEssential = true;
         }
     }
@@ -289,7 +296,18 @@ size_t Splitter::closestToInterval(Interval I, const std::vector<double>& pts) {
     // Adding one might bring us out of the range of possible indices. But since
     // we divide by 2 and floor our answer, it's okay
     size_t upperEnd = binarySearch(I.second, pts) + 1;
-    size_t result   = floor((lowerEnd + upperEnd) / 2);
+
+
+    size_t N = pts.size();
+    if (lowerEnd < N / 2 && upperEnd > N / 2) {
+        return N / 2;
+    } else if (upperEnd <= N / 2) {
+        return upperEnd;
+    } else {
+        return lowerEnd;
+    }
+
+    size_t result = floor((lowerEnd + upperEnd) / 2);
 
     my_assert(lowerEnd >= 0 && lowerEnd < pts.size(),
               "Impossible lower index: " + std::to_string(lowerEnd));
@@ -319,8 +337,8 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
      *    /___________\ /___________\
      *   v6           v3             v7
      */
-    std::array<Vector2, 8> v         = layOutButterfly(e);
-    std::vector<double> samplePoints = edgeSamplePoints[e];
+    std::array<Vector2, 8> v = layOutButterfly(e);
+    // std::vector<double> samplePoints = edgeSamplePoints[e];
 
     Interval cInt     = diskInterval(circumcenter(v[0], v[4], v[1]));
     Interval dInt     = diskInterval(circumcenter(v[5], v[2], v[1]));
@@ -332,11 +350,14 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
     auto complement = [&](Interval I) {
         if (empty(I)) {
             return std::make_pair(0.0, v[0].x);
-        } else if (I.first < 1e-8) {
+        } else if (I.first < 1e-4) {
             return std::make_pair(I.second, v[0].x);
-        } else if (I.second > v[0].x - 1e-8) {
+        } else if (I.second > v[0].x - 1e-4) {
             return std::make_pair(0.0, I.first);
         } else {
+
+            cout << "Interval: " << I.first << ", " << I.second << endl;
+            cout << "Edge: " << 0 << ", " << v[0].x << endl;
             my_assert(false,
                       "Interval should have one endpoint at edge endpoint");
         }
@@ -363,25 +384,35 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
 
     my_assert(!empty(bestIntersector), "At least I0 isn't empty");
 
-    geo.requireEdgeLengths();
-    size_t splitPointIdx = closestToInterval(bestIntersector, samplePoints);
-    double splitDist     = samplePoints[splitPointIdx];
-    double splitBary     = 1 - splitDist / geo.edgeLengths[e];
+    // geo.requireEdgeLengths();
+    // size_t splitPointIdx = closestToInterval(bestIntersector, samplePoints);
+    // double splitDist     = samplePoints[splitPointIdx];
+
+    Interval bI      = bestIntersector;
+    double mid       = v[0].x / 2;
+    double splitDist = 0;
+    if (bI.first < mid && bI.second > mid) {
+        splitDist = mid;
+    } else if (bI.first >= mid) {
+        splitDist = bI.first;
+    } else if (bI.second <= mid) {
+        splitDist = bI.second;
+    }
+    double splitBary = 1 - splitDist / geo.edgeLength(e);
 
     my_assert(splitBary > 0 && splitBary < 1, "splitBary is invalid");
 
-    std::vector<double> firstHalfSamplePoints, secondHalfSamplePoints;
-    for (size_t iS = 0; iS < splitPointIdx; ++iS) {
-        firstHalfSamplePoints.push_back(samplePoints[iS]);
-    }
-    for (size_t iS = splitPointIdx + 1; iS < samplePoints.size(); ++iS) {
-        secondHalfSamplePoints.push_back(samplePoints[iS] - splitDist);
-    }
+    // std::vector<double> firstHalfSamplePoints, secondHalfSamplePoints;
+    // for (size_t iS = 0; iS < splitPointIdx; ++iS) {
+    //     firstHalfSamplePoints.push_back(samplePoints[iS]);
+    // }
+    // for (size_t iS = splitPointIdx + 1; iS < samplePoints.size(); ++iS) {
+    //     secondHalfSamplePoints.push_back(samplePoints[iS] - splitDist);
+    // }
 
     // Compute new vertex position before splitting e
-    geo.requireVertexPositions();
-    Vector3 p2     = geo.vertexPositions[e.halfedge().vertex()];
-    Vector3 p0     = geo.vertexPositions[e.halfedge().twin().vertex()];
+    Vector3 p2     = geo.inputVertexPositions[e.halfedge().vertex()];
+    Vector3 p0     = geo.inputVertexPositions[e.halfedge().twin().vertex()];
     Vector3 newPos = splitBary * p2 + (1 - splitBary) * p0;
 
     // ------------ e -------------->
@@ -391,11 +422,11 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
     my_assert(geo.mesh.isTriangular(), "Mesh not triangle (2)");
     Halfedge newHe1 = newHe2.next().next().twin().next().next();
 
-    edgeSamplePoints[newHe1.edge()] = firstHalfSamplePoints;
-    edgeSamplePoints[newHe2.edge()] = secondHalfSamplePoints;
+    // edgeSamplePoints[newHe1.edge()] = firstHalfSamplePoints;
+    // edgeSamplePoints[newHe2.edge()] = secondHalfSamplePoints;
 
-    edgeSamplePoints[newHe1.next().edge()]        = std::vector<double>{};
-    edgeSamplePoints[newHe2.twin().next().edge()] = std::vector<double>{};
+    // edgeSamplePoints[newHe1.next().edge()]        = std::vector<double>{};
+    // edgeSamplePoints[newHe2.twin().next().edge()] = std::vector<double>{};
 
     flatEdge[newHe1.edge()] = false;
     flatEdge[newHe2.edge()] = false;
@@ -405,15 +436,14 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
 
     geo.inputVertexPositions[newHe2.vertex()] = newPos;
 
-    // Only need a few angles here
-    geo.refreshQuantities();
-
     return std::make_pair(newHe1, newHe2);
 }
 
 bool Splitter::isDelaunay(Edge e) { return geo.edgeCotanWeight(e) > -1e-12; }
 
-bool Splitter::empty(Interval i) { return i.first >= i.second; }
+bool Splitter::empty(Interval i) {
+    return (i.first >= i.second) || std::isnan(i.first) || std::isnan(i.second);
+}
 Interval Splitter::intersect(Interval a, Interval b) {
     return std::make_pair(fmax(a.first, b.first), fmin(a.second, b.second));
 }
@@ -489,34 +519,36 @@ Disk Splitter::circumcenter(Vector2 v1, Vector2 v2, Vector2 v3) {
  */
 std::array<Vector2, 8> Splitter::layOutButterfly(Edge e) {
     std::array<Vector2, 8> butterfly;
-    geo.requireEdgeLengths();
-    geo.requireCornerAngles();
-    const EdgeData<double>& len   = geo.edgeLengths;
-    const CornerData<double>& ang = geo.cornerAngles;
 
-    double lAB     = len[e];
-    double lAD     = len[e.halfedge().next().next().edge()];
-    double lBE     = len[e.halfedge().twin().next().edge()];
-    double thetaA0 = ang[e.halfedge().next().corner()];
-    double thetaA2 = ang[e.halfedge().corner()];
-    double thetaB0 = ang[e.halfedge().twin().corner()];
-    double thetaB2 = ang[e.halfedge().twin().next().corner()];
+    double lAB     = geo.edgeLength(e);
+    double lAD     = geo.edgeLength(e.halfedge().next().next().edge());
+    double lBE     = geo.edgeLength(e.halfedge().twin().next().edge());
+    double thetaA0 = geo.cornerAngle(e.halfedge().next().corner());
+    double thetaA2 = geo.cornerAngle(e.halfedge().corner());
+    double thetaB0 = geo.cornerAngle(e.halfedge().twin().corner());
+    double thetaB2 = geo.cornerAngle(e.halfedge().twin().next().corner());
 
     butterfly[0] = Vector2{lAB, 0};
     butterfly[1] = Vector2{cos(thetaA2), sin(thetaA2)} * lAD;
     butterfly[2] = Vector2{0, 0};
     butterfly[3] = Vector2{cos(thetaB2), -sin(thetaB2)} * lBE;
 
-    double lCdiag = len[e.halfedge().next().twin().next().edge()];
-    double lDdiag = len[e.halfedge().next().next().twin().next().next().edge()];
-    double lEdiag = len[e.halfedge().twin().next().twin().next().edge()];
-    double lFdiag =
-        len[e.halfedge().twin().next().next().twin().next().next().edge()];
+    double lCdiag = geo.edgeLength(e.halfedge().next().twin().next().edge());
+    double lDdiag =
+        geo.edgeLength(e.halfedge().next().next().twin().next().next().edge());
+    double lEdiag =
+        geo.edgeLength(e.halfedge().twin().next().twin().next().edge());
+    double lFdiag = geo.edgeLength(
+        e.halfedge().twin().next().next().twin().next().next().edge());
 
-    double thetaC0 = ang[e.halfedge().next().twin().next().corner()];
-    double thetaD2 = ang[e.halfedge().next().next().twin().corner()];
-    double thetaE2 = ang[e.halfedge().twin().next().twin().next().corner()];
-    double thetaF0 = ang[e.halfedge().twin().next().next().twin().corner()];
+    double thetaC0 =
+        geo.cornerAngle(e.halfedge().next().twin().next().corner());
+    double thetaD2 =
+        geo.cornerAngle(e.halfedge().next().next().twin().corner());
+    double thetaE2 =
+        geo.cornerAngle(e.halfedge().twin().next().twin().next().corner());
+    double thetaF0 =
+        geo.cornerAngle(e.halfedge().twin().next().next().twin().corner());
 
     butterfly[4] = butterfly[0] + Vector2{cos(M_PI - thetaC0 - thetaA0),
                                           sin(M_PI - thetaC0 - thetaA0)} *
@@ -530,6 +562,54 @@ std::array<Vector2, 8> Splitter::layOutButterfly(Edge e) {
     butterfly[7] = butterfly[0] + Vector2{cos(M_PI - thetaF0 - thetaB0),
                                           -sin(M_PI - thetaF0 - thetaB0)} *
                                       lFdiag;
+
+    return butterfly;
+}
+
+/*
+ *
+ *  v4_____________v1___________ v3
+ *    \           / \           /
+ *     \         /   \         /
+ *      \   D   /     \   C   /
+ *       \     /   A   \     /
+ *        \   /         \   /
+ *         \ /           \ /
+ *        v2 ----- e --->-  v0
+ *  I refer to edges by the adjacent faces. E.g. e is edge AB
+ *     For edges on the boundary, I never use the top and
+ *     bottom edges, so I just refer to them by face.
+ *     E.g. edge Ddiag is the left edge of face D.
+ *  I refer to corners by the face and vertex. E.g. corner A2
+ *     is the corner at the base of edge e in face A
+ */
+std::array<Vector2, 8> Splitter::layOutCroissant(Edge e) {
+    std::array<Vector2, 8> butterfly;
+
+    double lAB     = geo.edgeLength(e);
+    double lAD     = geo.edgeLength(e.halfedge().next().next().edge());
+    double lBE     = geo.edgeLength(e.halfedge().twin().next().edge());
+    double thetaA0 = geo.cornerAngle(e.halfedge().next().corner());
+    double thetaA2 = geo.cornerAngle(e.halfedge().corner());
+
+    butterfly[0] = Vector2{lAB, 0};
+    butterfly[1] = Vector2{cos(thetaA2), sin(thetaA2)} * lAD;
+    butterfly[2] = Vector2{0, 0};
+
+    double lCdiag = geo.edgeLength(e.halfedge().next().twin().next().edge());
+    double lDdiag =
+        geo.edgeLength(e.halfedge().next().next().twin().next().next().edge());
+
+    double thetaC0 =
+        geo.cornerAngle(e.halfedge().next().twin().next().corner());
+    double thetaD2 =
+        geo.cornerAngle(e.halfedge().next().next().twin().corner());
+
+    butterfly[3] = butterfly[0] + Vector2{cos(M_PI - thetaC0 - thetaA0),
+                                          sin(M_PI - thetaC0 - thetaA0)} *
+                                      lCdiag;
+    butterfly[4] =
+        Vector2{cos(thetaA2 + thetaD2), sin(thetaA2 + thetaD2)} * lDdiag;
 
     return butterfly;
 }
