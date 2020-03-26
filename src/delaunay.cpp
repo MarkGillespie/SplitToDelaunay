@@ -107,19 +107,6 @@ std::vector<Edge> Splitter::flipFlatEdgesToDelaunay(std::set<Edge> edges) {
 void Splitter::splitGeometry(bool verbose) {
     Halfedge newHe1, newHe2;
 
-    // std::vector<Vector3> samplePositions;
-    // edgeSamplePoints = EdgeData<std::vector<double>>(geo.mesh);
-    // for (Edge e : geo.mesh.edges()) {
-    //     edgeSamplePoints[e] = edgePoints(e);
-    //     geo.requireVertexPositions();
-    //     Vector3 p = geo.vertexPositions[e.halfedge().vertex()];
-    //     Vector3 q = geo.vertexPositions[e.halfedge().twin().vertex()];
-    //     double l  = (p - q).norm();
-    //     for (double d : edgeSamplePoints[e]) {
-    //         samplePositions.push_back(p * (d / l) + q * (1 - d / l));
-    //     }
-    // }
-
     EdgeData<size_t> eIdx = geo.mesh.getEdgeIndices();
 
     HalfedgeData<size_t> originalFaceIndices(geo.mesh);
@@ -153,7 +140,8 @@ void Splitter::splitGeometry(bool verbose) {
         inQueue[e] = false;
 
         // if (!edgeSamplePoints[e].empty() && !isDelaunay(e)) {
-        if (!isDelaunay(e)) {
+        // TODO: This doesn't quite do the length constraints properly
+        if (geo.edgeLength(e) >= 2 * rho_e && !isDelaunay(e)) {
             size_t faceIndex     = originalFaceIndices[e.halfedge()];
             size_t faceIndexTwin = originalFaceIndices[e.halfedge().twin()];
 
@@ -207,17 +195,15 @@ void Splitter::splitGeometry(bool verbose) {
         if (!printedFlat && flatEdge[e] && !isDelaunay(e)) {
             cout << "Edge " << eIdx[e] << " is not Delaunay" << endl;
             cout << "It is " << (flatEdge[e] ? "" : "not ") << "flat" << endl;
-            // cout << "It has " << (edgeSamplePoints[e].empty() ? "no " : "some
-            // ")
-            //      << "sample points" << endl;
+            cout << "It is " << (geo.edgeLength(e) >= 2 * rho_e ? "" : "not ")
+                 << "long enough to split" << endl;
             printedFlat = true;
         }
         if (!printedEssential && !flatEdge[e] && !isDelaunay(e)) {
             cout << "Edge " << eIdx[e] << " is not Delaunay" << endl;
             cout << "It is " << (flatEdge[e] ? "" : "not ") << "flat" << endl;
-            // cout << "It has " << (edgeSamplePoints[e].empty() ? "no " : "some
-            // ")
-            //      << "sample points" << endl;
+            cout << "It is " << (geo.edgeLength(e) >= 2 * rho_e ? "" : "not ")
+                 << "long enough to split" << endl;
             printedEssential = true;
         }
     }
@@ -287,7 +273,6 @@ size_t binarySearch(double goal, const std::vector<double>& points) {
     return floor((lower + upper) / 2);
 }
 
-// TODO: binary search instead
 size_t Splitter::closestToInterval(Interval I, const std::vector<double>& pts) {
     my_assert(!empty(I), "Cannot use empty interval");
 
@@ -327,14 +312,17 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
     } else {
         splitI = computeSplitInterval(e);
     }
-    double mid       = geo.edgeLength(e) / 2;
+    double len       = geo.edgeLength(e);
+    double mid       = len / 2;
     double splitDist = 0;
+
+    // This method of enforcing spacing isn't quite right
     if (splitI.first < mid && splitI.second > mid) {
         splitDist = mid;
     } else if (splitI.first >= mid) {
-        splitDist = splitI.first;
+        splitDist = fmin(splitI.first, len - rho_e);
     } else if (splitI.second <= mid) {
-        splitDist = splitI.second;
+        splitDist = fmax(rho_e, splitI.second);
     }
     double splitBary = 1 - splitDist / geo.edgeLength(e);
 
@@ -390,6 +378,16 @@ Interval Splitter::computeSplitInterval(Edge e) {
     Interval fInt     = diskInterval(circumcenter(v[3], v[7], v[0]));
     Interval leftInt  = diskInterval(circumcenter(v[1], v[2], v[3]));
     Interval rightInt = diskInterval(circumcenter(v[0], v[1], v[3]));
+
+    // Floating point might mess up interval endpoints. We fix them here
+    // Note that it's possible that e.g. cInt has v0 as its left endpoint rather
+    // than the right endpoint as I assume here That's okay, since I only care
+    // about the intersection of cInt with the edge, which is empty in that case
+    // anyway
+    cInt.second = v[0].x;
+    dInt.first  = v[2].x;
+    eInt.first  = v[2].x;
+    fInt.second = v[0].x;
 
     // I1 ... I4 are the complements of the circumcircle intervals
     Interval Iedge = std::make_pair(0, v[0].x);

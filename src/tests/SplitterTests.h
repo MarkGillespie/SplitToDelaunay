@@ -133,4 +133,9 @@ TEST_F(SplitterTest, IntervalComplement) {
     comp   = Splitter::complement(little, big);
     EXPECT_NEAR(comp.first, -1, 1e-8);
     EXPECT_NEAR(comp.second, 2, 1e-8);
+
+    little = std::make_pair(-1.1, -1);
+    comp   = Splitter::complement(little, big);
+    EXPECT_NEAR(comp.first, -1, 1e-8);
+    EXPECT_NEAR(comp.second, 2, 1e-8);
 }
