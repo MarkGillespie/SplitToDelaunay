@@ -47,6 +47,8 @@ class Splitter {
     static std::vector<std::vector<size_t>> genIntervalCombinations();
     static bool empty(Interval i);
     static Interval intersect(Interval a, Interval b);
+    static Interval intersectIndices(const std::vector<size_t>& inds,
+                                     const std::array<Interval, 5>& I);
     static size_t closestToInterval(Interval I, const std::vector<double>& pts);
 
     // Computes the intersection of the disk with the x-axis. Represents the

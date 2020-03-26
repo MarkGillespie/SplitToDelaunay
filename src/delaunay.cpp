@@ -8,7 +8,7 @@ std::vector<std::vector<size_t>> Splitter::genIntervalCombinations() {
     combos.reserve(14);
     for (size_t iSkip = 1; iSkip < 5; ++iSkip) {
         std::vector<size_t> skippedOne;
-        for (size_t i = 1; i < 5; ++i) {
+        for (size_t i = 0; i < 5; ++i) {
             if (i != iSkip) {
                 skippedOne.push_back(i);
             }
@@ -17,13 +17,14 @@ std::vector<std::vector<size_t>> Splitter::genIntervalCombinations() {
     }
     for (size_t iInclude = 1; iInclude < 5; ++iInclude) {
         for (size_t jInclude = 1; jInclude < iInclude; ++jInclude) {
-            combos.push_back(std::vector<size_t>{iInclude, jInclude});
+            combos.push_back(std::vector<size_t>{0, iInclude, jInclude});
         }
     }
 
     for (size_t i = 1; i < 5; ++i) {
-        combos.push_back(std::vector<size_t>{i});
+        combos.push_back(std::vector<size_t>{0, i});
     }
+    combos.push_back(std::vector<size_t>{0});
 
     return combos;
 }
@@ -189,31 +190,56 @@ std::vector<double> Splitter::edgePoints(Edge e) {
     }
 }
 
-// TODO: binary search instead
-size_t Splitter::closestToInterval(Interval I, const std::vector<double>& pts) {
-    double minDist      = I.second - I.first;
-    size_t minDistIndex = 0;
-    for (size_t iP = 0; iP < pts.size(); ++iP) {
-        double pt = pts[iP];
-        double dist;
-        if (pt >= I.first && pt <= I.second) {
-            return iP;
-        } else if (pt < I.first) {
-            dist = I.first - pt;
-        } else { // pt > I.second
-            dist = pt - I.second;
-        }
-        if (dist < minDist) {
-            minDist      = dist;
-            minDistIndex = iP;
+// Finds the greatest entry not greater than goal
+size_t binarySearch(double goal, const std::vector<double>& points) {
+    size_t lower = 0;
+    size_t upper = points.size();
+
+    while (lower <= upper) {
+        size_t m = floor((lower + upper) / 2);
+
+        if (points[m] < goal) {
+            if (m == points.size() - 1 ||
+                (m < points.size() - 1 && points[m + 1] > goal)) {
+                return m;
+            } else {
+                lower = m + 1;
+            }
+        } else if (points[m] > goal) {
+            if (m == 1 || (m > 1 && points[m - 1] < goal)) {
+                return m - 1;
+            } else if (m == 0) {
+                return 0;
+            } else {
+                upper = m - 1;
+            }
+        } else {
+            return m;
         }
     }
+    my_assert(false, "Binary search failed");
+    return floor((lower + upper) / 2);
+}
 
-    my_assert(pts.size() > 0, "How can this happen?");
-    my_assert(minDistIndex >= 0 && minDistIndex < pts.size(),
-              "list index out of range");
-    // cout << "\t not in interval, just close" << endl;
-    return minDistIndex;
+// TODO: binary search instead
+size_t Splitter::closestToInterval(Interval I, const std::vector<double>& pts) {
+    my_assert(!empty(I), "Cannot use empty interval");
+
+    size_t lowerEnd = binarySearch(I.first, pts);
+
+    // Adding one might bring us out of the range of possible indices. But since
+    // we divide by 2 and floor our answer, it's okay
+    size_t upperEnd = binarySearch(I.second, pts) + 1;
+    size_t result   = floor((lowerEnd + upperEnd) / 2);
+
+    my_assert(lowerEnd >= 0 && lowerEnd < pts.size(),
+              "Impossible lower index: " + std::to_string(lowerEnd));
+    my_assert(upperEnd >= 0 && upperEnd <= pts.size(),
+              "Impossible upper index: " + std::to_string(upperEnd) +
+                  " is bigger than " + std::to_string(pts.size()));
+    my_assert(result >= 0 && result < pts.size(),
+              "Impossible index: " + std::to_string(result));
+    return result;
 }
 
 std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
@@ -261,23 +287,22 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
     std::array<Interval, 5> I{intersect(leftInt, rightInt), complement(cInt),
                               complement(dInt), complement(eInt),
                               complement(fInt)};
-    auto intersectAll = [&](std::vector<size_t> inds) {
-        if (inds.empty()) {
-            return std::make_pair(1.0, -1.0);
-        }
-        Interval out = I[0];
-        for (size_t iI = 0; iI < inds.size(); ++iI) {
-            out = intersect(out, I[inds[iI]]);
-        }
-        return out;
-    };
-
-    Interval bestIntersector = intersectAll(std::vector<size_t>{0, 1, 2, 3, 4});
-    bool allIntersect        = !empty(bestIntersector);
-    size_t comboIndex        = 0;
-    while (empty(bestIntersector)) {
-        bestIntersector = intersectAll(intervalCombinations[comboIndex++]);
+    // I[0] is guaranteed not to be empty, but sometimes it's just a single
+    // point. Here, we widen it slightly so that it doesn't fail tests later
+    if (empty(I[0])) {
+        I[0] = std::make_pair(leftInt.second - 1e-6, rightInt.first + 1e-6);
     }
+
+    Interval bestIntersector =
+        intersectIndices(std::vector<size_t>{0, 1, 2, 3, 4}, I);
+
+    size_t comboIndex = 0;
+    while (empty(bestIntersector)) {
+        bestIntersector =
+            intersectIndices(intervalCombinations[comboIndex++], I);
+    }
+
+    my_assert(!empty(bestIntersector), "At least I0 isn't empty");
 
     geo.requireEdgeLengths();
     size_t splitPointIdx = closestToInterval(bestIntersector, samplePoints);
@@ -325,6 +350,18 @@ bool Splitter::isDelaunay(Edge e) { return geo.edgeCotanWeight(e) > -1e-12; }
 bool Splitter::empty(Interval i) { return i.first >= i.second; }
 Interval Splitter::intersect(Interval a, Interval b) {
     return std::make_pair(fmax(a.first, b.first), fmin(a.second, b.second));
+}
+Interval Splitter::intersectIndices(const std::vector<size_t>& inds,
+                                    const std::array<Interval, 5>& I) {
+
+    if (inds.empty()) {
+        return std::make_pair(1.0, -1.0);
+    }
+    Interval out = I[0];
+    for (size_t iI = 0; iI < inds.size(); ++iI) {
+        out = intersect(out, I[inds[iI]]);
+    }
+    return out;
 }
 
 // Computes the intersection of the disk with the x-axis. Represents the
