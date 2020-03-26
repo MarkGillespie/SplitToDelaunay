@@ -102,3 +102,35 @@ TEST_F(SplitterTest, diskLineIntersection) {
 
     EXPECT_TRUE(Splitter::empty(i));
 }
+
+TEST_F(SplitterTest, IntervalComplement) {
+    Interval big    = std::make_pair(-1, 2);
+    Interval little = std::make_pair(0, 2);
+    Interval comp   = Splitter::complement(little, big);
+    EXPECT_NEAR(comp.first, -1, 1e-8);
+    EXPECT_NEAR(comp.second, 0, 1e-8);
+
+    little = std::make_pair(0, 3);
+    comp   = Splitter::complement(little, big);
+    EXPECT_NEAR(comp.first, -1, 1e-8);
+    EXPECT_NEAR(comp.second, 0, 1e-8);
+
+    little = std::make_pair(-1, 0);
+    comp   = Splitter::complement(little, big);
+    EXPECT_NEAR(comp.first, 0, 1e-8);
+    EXPECT_NEAR(comp.second, 2, 1e-8);
+
+    little = std::make_pair(-2, 0);
+    comp   = Splitter::complement(little, big);
+    EXPECT_NEAR(comp.first, 0, 1e-8);
+    EXPECT_NEAR(comp.second, 2, 1e-8);
+
+    little = std::make_pair(-2, 3);
+    comp   = Splitter::complement(little, big);
+    EXPECT_TRUE(Splitter::empty(comp));
+
+    little = std::make_pair(1, -1);
+    comp   = Splitter::complement(little, big);
+    EXPECT_NEAR(comp.first, -1, 1e-8);
+    EXPECT_NEAR(comp.second, 2, 1e-8);
+}

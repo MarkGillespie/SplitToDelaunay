@@ -320,6 +320,51 @@ size_t Splitter::closestToInterval(Interval I, const std::vector<double>& pts) {
 }
 
 std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
+
+    Interval splitI;
+    if (e.isBoundary()) {
+        splitI = computeBoundarySplitInterval(e);
+    } else {
+        splitI = computeSplitInterval(e);
+    }
+    double mid       = geo.edgeLength(e) / 2;
+    double splitDist = 0;
+    if (splitI.first < mid && splitI.second > mid) {
+        splitDist = mid;
+    } else if (splitI.first >= mid) {
+        splitDist = splitI.first;
+    } else if (splitI.second <= mid) {
+        splitDist = splitI.second;
+    }
+    double splitBary = 1 - splitDist / geo.edgeLength(e);
+
+    my_assert(splitBary > 0 && splitBary < 1, "splitBary is invalid");
+
+
+    // Compute new vertex position before splitting e
+    Vector3 p2     = geo.inputVertexPositions[e.halfedge().vertex()];
+    Vector3 p0     = geo.inputVertexPositions[e.halfedge().twin().vertex()];
+    Vector3 newPos = splitBary * p2 + (1 - splitBary) * p0;
+
+    // ------------ e -------------->
+    // -- newHe1 --> . --- newHe2 -->
+    Halfedge newHe2 = geo.mesh.splitEdgeTriangular(e);
+    Halfedge newHe1 = newHe2.next().next().twin().next().next();
+
+    flatEdge[newHe1.edge()] = false;
+    flatEdge[newHe2.edge()] = false;
+
+    flatEdge[newHe1.next().edge()]        = true;
+    flatEdge[newHe2.twin().next().edge()] = true;
+
+    geo.inputVertexPositions[newHe2.vertex()] = newPos;
+
+    return std::make_pair(newHe1, newHe2);
+}
+
+// Finds the interval that you should split in
+Interval Splitter::computeSplitInterval(Edge e) {
+
     /*
      *  v5_____________v1___________ v4
      *    \           / \           /
@@ -338,7 +383,6 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
      *   v6           v3             v7
      */
     std::array<Vector2, 8> v = layOutButterfly(e);
-    // std::vector<double> samplePoints = edgeSamplePoints[e];
 
     Interval cInt     = diskInterval(circumcenter(v[0], v[4], v[1]));
     Interval dInt     = diskInterval(circumcenter(v[5], v[2], v[1]));
@@ -347,26 +391,11 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
     Interval leftInt  = diskInterval(circumcenter(v[1], v[2], v[3]));
     Interval rightInt = diskInterval(circumcenter(v[0], v[1], v[3]));
 
-    auto complement = [&](Interval I) {
-        if (empty(I)) {
-            return std::make_pair(0.0, v[0].x);
-        } else if (I.first < 1e-4) {
-            return std::make_pair(I.second, v[0].x);
-        } else if (I.second > v[0].x - 1e-4) {
-            return std::make_pair(0.0, I.first);
-        } else {
-
-            cout << "Interval: " << I.first << ", " << I.second << endl;
-            cout << "Edge: " << 0 << ", " << v[0].x << endl;
-            my_assert(false,
-                      "Interval should have one endpoint at edge endpoint");
-        }
-    };
-
     // I1 ... I4 are the complements of the circumcircle intervals
-    std::array<Interval, 5> I{intersect(leftInt, rightInt), complement(cInt),
-                              complement(dInt), complement(eInt),
-                              complement(fInt)};
+    Interval Iedge = std::make_pair(0, v[0].x);
+    std::array<Interval, 5> I{intersect(leftInt, rightInt),
+                              complement(cInt, Iedge), complement(dInt, Iedge),
+                              complement(eInt, Iedge), complement(fInt, Iedge)};
     // I[0] is guaranteed not to be empty, but sometimes it's just a single
     // point. Here, we widen it slightly so that it doesn't fail tests later
     if (empty(I[0])) {
@@ -383,60 +412,82 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
     }
 
     my_assert(!empty(bestIntersector), "At least I0 isn't empty");
+    return bestIntersector;
+}
 
-    // geo.requireEdgeLengths();
-    // size_t splitPointIdx = closestToInterval(bestIntersector, samplePoints);
-    // double splitDist     = samplePoints[splitPointIdx];
+Interval Splitter::computeBoundarySplitInterval(Edge e) {
+    /*
+     *  v4_____________v1___________ v3
+     *    \           / \           /
+     *     \         /   \         /
+     *      \   D   /     \   C   /
+     *       \     /   A   \     /
+     *        \   /         \   /
+     *         \ /           \ /
+     *        v2 ----- e --->-  v0
+     */
+    std::array<Vector2, 5> v = layOutCroissant(e);
 
-    Interval bI      = bestIntersector;
-    double mid       = v[0].x / 2;
-    double splitDist = 0;
-    if (bI.first < mid && bI.second > mid) {
-        splitDist = mid;
-    } else if (bI.first >= mid) {
-        splitDist = bI.first;
-    } else if (bI.second <= mid) {
-        splitDist = bI.second;
+    Interval cInt = diskInterval(circumcenter(v[0], v[3], v[1]));
+    Interval dInt = diskInterval(circumcenter(v[4], v[2], v[1]));
+
+    // The left and right intervals work differently now
+    // LeftInt goes from v2 to the point on e where a line perpendicular to
+    // v2-v1 coming from v1 would intersect it
+    Vector2 e21 = v[1] - v[2];
+    Vector2 e21Perp{e21.y, -e21.x};
+    e21Perp *= e21.y / -e21Perp.y;
+    Vector2 intervalVec = e21 + e21Perp;
+    my_assert(abs(intervalVec.y) < 1e-8,
+              "You did some algebra wrong. This vector should lie along edge e "
+              "(the x axis)");
+    Interval leftInt = std::make_pair(0, intervalVec.x);
+
+    Vector2 e01 = v[1] - v[2];
+    Vector2 e01Perp{-e01.y, e01.x};
+    e01Perp *= e01.y / -e01Perp.y;
+    intervalVec = e01 + e01Perp;
+    my_assert(abs(intervalVec.y) < 1e-8,
+              "You did some algebra wrong. This vector should lie along edge e "
+              "(the x axis)");
+    Interval rightInt = std::make_pair(intervalVec.x, v[0].x);
+
+    Interval Iedge = std::make_pair(0, v[0].x);
+    std::array<Interval, 3> I{intersect(leftInt, rightInt),
+                              complement(cInt, Iedge), complement(dInt, Iedge)};
+
+    // I[0] is guaranteed not to be empty, but sometimes it's just a single
+    // point. Here, we widen it slightly so that it doesn't fail tests later
+    if (empty(I[0])) {
+        I[0] = std::make_pair(leftInt.second - 1e-6, rightInt.first + 1e-6);
     }
-    double splitBary = 1 - splitDist / geo.edgeLength(e);
 
-    my_assert(splitBary > 0 && splitBary < 1, "splitBary is invalid");
+    Interval bestIntersection = intersect(I[0], intersect(I[1], I[2]));
+    if (empty(bestIntersection)) {
+        Interval intersectC = intersect(I[0], I[1]);
+        Interval intersectD = intersect(I[0], I[2]);
 
-    // std::vector<double> firstHalfSamplePoints, secondHalfSamplePoints;
-    // for (size_t iS = 0; iS < splitPointIdx; ++iS) {
-    //     firstHalfSamplePoints.push_back(samplePoints[iS]);
-    // }
-    // for (size_t iS = splitPointIdx + 1; iS < samplePoints.size(); ++iS) {
-    //     secondHalfSamplePoints.push_back(samplePoints[iS] - splitDist);
-    // }
-
-    // Compute new vertex position before splitting e
-    Vector3 p2     = geo.inputVertexPositions[e.halfedge().vertex()];
-    Vector3 p0     = geo.inputVertexPositions[e.halfedge().twin().vertex()];
-    Vector3 newPos = splitBary * p2 + (1 - splitBary) * p0;
-
-    // ------------ e -------------->
-    // -- newHe1 --> . --- newHe2 -->
-    my_assert(geo.mesh.isTriangular(), "Mesh not triangle");
-    Halfedge newHe2 = geo.mesh.splitEdgeTriangular(e);
-    my_assert(geo.mesh.isTriangular(), "Mesh not triangle (2)");
-    Halfedge newHe1 = newHe2.next().next().twin().next().next();
-
-    // edgeSamplePoints[newHe1.edge()] = firstHalfSamplePoints;
-    // edgeSamplePoints[newHe2.edge()] = secondHalfSamplePoints;
-
-    // edgeSamplePoints[newHe1.next().edge()]        = std::vector<double>{};
-    // edgeSamplePoints[newHe2.twin().next().edge()] = std::vector<double>{};
-
-    flatEdge[newHe1.edge()] = false;
-    flatEdge[newHe2.edge()] = false;
-
-    flatEdge[newHe1.next().edge()]        = true;
-    flatEdge[newHe2.twin().next().edge()] = true;
-
-    geo.inputVertexPositions[newHe2.vertex()] = newPos;
-
-    return std::make_pair(newHe1, newHe2);
+        if (empty(intersectC)) {
+            if (empty(intersectD)) {
+                return I[0];
+            } else {
+                return intersectD;
+            }
+        } else if (empty(intersectD)) {
+            return intersectC;
+        } else {
+            double midPt = v[0].x / 2;
+            double cDist = distTo(intersectC, midPt);
+            double dDist = distTo(intersectD, midPt);
+            if (cDist <= dDist) {
+                return intersectC;
+            } else {
+                return intersectD;
+            }
+        }
+    } else {
+        return bestIntersection;
+    }
 }
 
 bool Splitter::isDelaunay(Edge e) { return geo.edgeCotanWeight(e) > -1e-12; }
@@ -444,6 +495,39 @@ bool Splitter::isDelaunay(Edge e) { return geo.edgeCotanWeight(e) > -1e-12; }
 bool Splitter::empty(Interval i) {
     return (i.first >= i.second) || std::isnan(i.first) || std::isnan(i.second);
 }
+double Splitter::distTo(Interval i, double d) {
+    my_assert(!empty(i), "Cannot find distance to empty interval");
+    if (d >= i.first && d <= i.second) {
+        return 0;
+    } else if (d < i.first) {
+        return i.first - d;
+    } else {
+        return d - i.second;
+    }
+}
+Interval Splitter::complement(Interval little, Interval big) {
+
+    if (empty(little)) {
+        return big;
+    } else {
+        double leftDist  = little.first - big.first;
+        double rightDist = big.second - little.second;
+
+        if (leftDist > 1e-4 && rightDist > 1e-4) {
+            cout << "little: " << little.first << ", " << little.second << endl;
+            cout << "big   : " << big.first << ", " << big.second << endl;
+            my_assert(false,
+                      "little should have one endpoint at big's endpoint");
+        }
+
+        if (leftDist > rightDist) {
+            return std::make_pair(big.first, fmin(little.first, big.second));
+        } else {
+            return std::make_pair(fmax(little.second, big.first), big.second);
+        }
+    }
+}
+
 Interval Splitter::intersect(Interval a, Interval b) {
     return std::make_pair(fmax(a.first, b.first), fmin(a.second, b.second));
 }
@@ -517,6 +601,7 @@ Disk Splitter::circumcenter(Vector2 v1, Vector2 v2, Vector2 v3) {
  *  I refer to corners by the face and vertex. E.g. corner A2
  *     is the corner at the base of edge e in face A
  */
+// TODO: crashes if c, d, e, f are boundary edges
 std::array<Vector2, 8> Splitter::layOutButterfly(Edge e) {
     std::array<Vector2, 8> butterfly;
 
@@ -583,8 +668,8 @@ std::array<Vector2, 8> Splitter::layOutButterfly(Edge e) {
  *  I refer to corners by the face and vertex. E.g. corner A2
  *     is the corner at the base of edge e in face A
  */
-std::array<Vector2, 8> Splitter::layOutCroissant(Edge e) {
-    std::array<Vector2, 8> butterfly;
+std::array<Vector2, 5> Splitter::layOutCroissant(Edge e) {
+    std::array<Vector2, 5> croissant;
 
     double lAB     = geo.edgeLength(e);
     double lAD     = geo.edgeLength(e.halfedge().next().next().edge());
@@ -592,9 +677,9 @@ std::array<Vector2, 8> Splitter::layOutCroissant(Edge e) {
     double thetaA0 = geo.cornerAngle(e.halfedge().next().corner());
     double thetaA2 = geo.cornerAngle(e.halfedge().corner());
 
-    butterfly[0] = Vector2{lAB, 0};
-    butterfly[1] = Vector2{cos(thetaA2), sin(thetaA2)} * lAD;
-    butterfly[2] = Vector2{0, 0};
+    croissant[0] = Vector2{lAB, 0};
+    croissant[1] = Vector2{cos(thetaA2), sin(thetaA2)} * lAD;
+    croissant[2] = Vector2{0, 0};
 
     double lCdiag = geo.edgeLength(e.halfedge().next().twin().next().edge());
     double lDdiag =
@@ -605,11 +690,11 @@ std::array<Vector2, 8> Splitter::layOutCroissant(Edge e) {
     double thetaD2 =
         geo.cornerAngle(e.halfedge().next().next().twin().corner());
 
-    butterfly[3] = butterfly[0] + Vector2{cos(M_PI - thetaC0 - thetaA0),
+    croissant[3] = croissant[0] + Vector2{cos(M_PI - thetaC0 - thetaA0),
                                           sin(M_PI - thetaC0 - thetaA0)} *
                                       lCdiag;
-    butterfly[4] =
+    croissant[4] =
         Vector2{cos(thetaA2 + thetaD2), sin(thetaA2 + thetaD2)} * lDdiag;
 
-    return butterfly;
+    return croissant;
 }

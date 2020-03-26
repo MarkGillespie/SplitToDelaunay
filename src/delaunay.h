@@ -29,6 +29,12 @@ inline std::string toString(size_t n, size_t digits) {
 using Interval = std::pair<double, double>;
 using Disk     = std::pair<Vector2, double>;
 
+
+/*
+ * Class to make a mesh delaunay via edge splits. At the moment, it only works
+ * on meshes without boundary
+ *
+ */
 class Splitter {
   public:
     Splitter(VertexPositionGeometry& geo_);
@@ -44,9 +50,19 @@ class Splitter {
     std::pair<Halfedge, Halfedge> splitEdge(Edge e);
 
     bool isDelaunay(Edge e);
+
+    Interval computeSplitInterval(Edge e);
+    Interval computeBoundarySplitInterval(Edge e);
+
     static std::vector<std::vector<size_t>> intervalCombinations;
     static std::vector<std::vector<size_t>> genIntervalCombinations();
     static bool empty(Interval i);
+    static double distTo(Interval i, double d);
+
+    // Staps little to big's closes endpoint and then returns the interval big -
+    // little
+    static Interval complement(Interval little, Interval big);
+
     static Interval intersect(Interval a, Interval b);
     static Interval intersectIndices(const std::vector<size_t>& inds,
                                      const std::array<Interval, 5>& I);
@@ -56,7 +72,6 @@ class Splitter {
     // resulting interval with its lower end first. Returns (1, -1) if the
     // intersection is empty
     static Interval diskInterval(Disk disk);
-
     static Disk circumcenter(Vector2 v1, Vector2 v2, Vector2 v3);
     std::vector<double> edgePoints(Edge e);
     std::array<Vector2, 8> layOutButterfly(Edge e);
