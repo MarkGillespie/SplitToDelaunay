@@ -109,31 +109,47 @@ void Splitter::splitGeometry(bool verbose) {
 
     EdgeData<size_t> eIdx = geo.mesh.getEdgeIndices();
 
+    std::deque<DynamicEdge> edgesToCheck;
+    EdgeData<char> inQueue(geo.mesh, false);
+    for (Edge e : geo.mesh.edges()) {
+        if (flatEdge[e]) {
+            edgesToCheck.push_back(DynamicEdge(e));
+            inQueue[e] = true;
+        }
+    }
+
     size_t nSplits = 0;
     bool done      = false;
-    while (!done) {
-        done = true;
-        for (Edge e : geo.mesh.edges()) {
-            if (!edgeSamplePoints[e].empty() && !isDelaunay(e)) {
-                done = false;
+    while (!edgesToCheck.empty()) {
+        // Get the top element from the queue of possibily non-Delaunay edges
+        DynamicEdge e = edgesToCheck.front();
+        edgesToCheck.pop_front();
+        inQueue[e.decay()] = false;
 
-                std::tie(newHe1, newHe2) = splitEdge(e);
+        if (!edgeSamplePoints[e].empty() && !isDelaunay(e)) {
+            done = false;
 
-                // Handle the aftermath of a flip
-                nSplits++;
+            std::tie(newHe1, newHe2) = splitEdge(e);
 
-                std::array<Edge, 6> neighEdges{
-                    newHe1.next().edge(),
-                    newHe1.next().next().edge(),
-                    newHe2.next().edge(),
-                    newHe2.twin().next().edge(),
-                    newHe2.twin().next().next().edge(),
-                    newHe1.twin().next().edge()};
+            // Handle the aftermath of a flip
+            nSplits++;
 
-                flipFlatEdgesToDelaunay(neighEdges);
+            std::array<Edge, 6> neighEdges{newHe1.next().edge(),
+                                           newHe1.next().next().edge(),
+                                           newHe2.next().edge(),
+                                           newHe2.twin().next().edge(),
+                                           newHe2.twin().next().next().edge(),
+                                           newHe1.twin().next().edge()};
 
-                eIdx = geo.mesh.getEdgeIndices();
+            flipFlatEdgesToDelaunay(neighEdges);
+            for (Edge nE : neighEdges) {
+                if (!flatEdge[nE] && !inQueue[nE]) {
+                    edgesToCheck.emplace_back(nE);
+                    inQueue[nE] = true;
+                }
             }
+
+            eIdx = geo.mesh.getEdgeIndices();
         }
     }
 
