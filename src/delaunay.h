@@ -33,6 +33,8 @@ class Splitter {
     Splitter(VertexPositionGeometry& geo_);
     void splitGeometry(bool verbose = false);
 
+    void flipFlatEdgesToDelaunay(std::array<Edge, 6> edges);
+
     VertexPositionGeometry& geo;
     double rho_v, rho_e;
     EdgeData<std::vector<double>> edgeSamplePoints;

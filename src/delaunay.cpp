@@ -49,6 +49,48 @@ Splitter::Splitter(VertexPositionGeometry& geo_) : geo(geo_) {
     flatEdge = EdgeData<char>(geo.mesh, false);
 }
 
+void Splitter::flipFlatEdgesToDelaunay(std::array<Edge, 6> edges) {
+    std::deque<Edge> edgesToCheck;
+    EdgeData<char> inQueue(geo.mesh, false);
+    for (Edge e : edges) {
+        if (flatEdge[e]) {
+            edgesToCheck.push_back(e);
+            inQueue[e] = true;
+        }
+    }
+
+    while (!edgesToCheck.empty()) {
+
+        // Get the top element from the queue of possibily non-Delaunay edges
+        Edge e = edgesToCheck.front();
+        edgesToCheck.pop_front();
+        inQueue[e] = false;
+
+        if (!isDelaunay(e)) {
+            bool wasFlipped = geo.mesh.flip(e);
+
+            if (!wasFlipped) continue;
+
+            // Handle the aftermath of a flip
+
+            // Add neighbors to queue, as they may need flipping now
+            Halfedge he   = e.halfedge();
+            Halfedge heN  = he.next();
+            Halfedge heT  = he.twin();
+            Halfedge heTN = heT.next();
+            std::array<Edge, 4> neighEdges{heN.edge(), heN.next().edge(),
+                                           heTN.edge(), heTN.next().edge()};
+            for (Edge nE : neighEdges) {
+                if (flatEdge[nE] && !inQueue[nE]) {
+                    edgesToCheck.push_back(nE);
+                    inQueue[nE] = true;
+                }
+            }
+        }
+    }
+    geo.refreshQuantities();
+}
+
 void Splitter::splitGeometry(bool verbose) {
     Halfedge newHe1, newHe2;
 
@@ -80,23 +122,15 @@ void Splitter::splitGeometry(bool verbose) {
                 // Handle the aftermath of a flip
                 nSplits++;
 
-                bool done2 = false;
-                while (!done2) {
-                    done2 = true;
-                    for (Edge e : geo.mesh.edges()) {
-                        if (flatEdge[e] && !isDelaunay(e)) {
-                            my_assert(geo.mesh.flip(e), "failed to flip");
-                            geo.refreshQuantities();
-                            done2 = false;
-                        }
-                    }
-                }
+                std::array<Edge, 6> neighEdges{
+                    newHe1.next().edge(),
+                    newHe1.next().next().edge(),
+                    newHe2.next().edge(),
+                    newHe2.twin().next().edge(),
+                    newHe2.twin().next().next().edge(),
+                    newHe1.twin().next().edge()};
 
-                for (Edge e : geo.mesh.edges()) {
-                    if (flatEdge[e] && !isDelaunay(e)) {
-                        my_assert(false, "How is this possible?");
-                    }
-                }
+                flipFlatEdgesToDelaunay(neighEdges);
 
                 eIdx = geo.mesh.getEdgeIndices();
             }
@@ -286,10 +320,7 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
     return std::make_pair(newHe1, newHe2);
 }
 
-bool Splitter::isDelaunay(Edge e) {
-    geo.requireEdgeCotanWeights();
-    return geo.edgeCotanWeight(e) > -1e-12;
-}
+bool Splitter::isDelaunay(Edge e) { return geo.edgeCotanWeight(e) > -1e-12; }
 
 bool Splitter::empty(Interval i) { return i.first >= i.second; }
 Interval Splitter::intersect(Interval a, Interval b) {
