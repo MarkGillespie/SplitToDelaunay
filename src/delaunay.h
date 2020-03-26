@@ -8,6 +8,7 @@
 #include "polyscope/surface_mesh.h"
 
 #include <deque>
+#include <set>
 
 using std::cout;
 using std::endl;
@@ -33,7 +34,7 @@ class Splitter {
     Splitter(VertexPositionGeometry& geo_);
     void splitGeometry(bool verbose = false);
 
-    void flipFlatEdgesToDelaunay(std::array<Edge, 6> edges);
+    std::vector<Edge> flipFlatEdgesToDelaunay(std::set<Edge> edges);
 
     VertexPositionGeometry& geo;
     double rho_v, rho_e;

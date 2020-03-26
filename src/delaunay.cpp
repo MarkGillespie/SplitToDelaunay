@@ -50,7 +50,7 @@ Splitter::Splitter(VertexPositionGeometry& geo_) : geo(geo_) {
     flatEdge = EdgeData<char>(geo.mesh, false);
 }
 
-void Splitter::flipFlatEdgesToDelaunay(std::array<Edge, 6> edges) {
+std::vector<Edge> Splitter::flipFlatEdgesToDelaunay(std::set<Edge> edges) {
     std::deque<Edge> edgesToCheck;
     EdgeData<char> inQueue(geo.mesh, false);
     for (Edge e : edges) {
@@ -59,6 +59,9 @@ void Splitter::flipFlatEdgesToDelaunay(std::array<Edge, 6> edges) {
             inQueue[e] = true;
         }
     }
+
+    std::vector<Edge> brokenEdges;
+    EdgeData<char> inReturnList(geo.mesh, false);
 
     while (!edgesToCheck.empty()) {
 
@@ -85,11 +88,16 @@ void Splitter::flipFlatEdgesToDelaunay(std::array<Edge, 6> edges) {
                 if (flatEdge[nE] && !inQueue[nE]) {
                     edgesToCheck.push_back(nE);
                     inQueue[nE] = true;
+                } else if (!flatEdge[nE] && !inReturnList[nE] &&
+                           !isDelaunay(nE)) {
+                    brokenEdges.push_back(nE);
+                    inReturnList[nE] = true;
                 }
             }
         }
     }
     geo.refreshQuantities();
+    return brokenEdges;
 }
 
 void Splitter::splitGeometry(bool verbose) {
@@ -110,50 +118,101 @@ void Splitter::splitGeometry(bool verbose) {
 
     EdgeData<size_t> eIdx = geo.mesh.getEdgeIndices();
 
+    HalfedgeData<size_t> originalFaceIndices(geo.mesh);
+    std::vector<std::set<Edge>> edgesPerFace(geo.mesh.nFaces(),
+                                             std::set<Edge>{});
+
+    // TODO: handle boundaries for real?
+    FaceData<size_t> fIdx = geo.mesh.getFaceIndices();
+    for (Halfedge he : geo.mesh.halfedges()) {
+        if (he.isInterior()) {
+            originalFaceIndices[he] = fIdx[he.face()];
+        } else {
+            originalFaceIndices[he] = fIdx[he.twin().face()];
+        }
+        edgesPerFace[originalFaceIndices[he]].insert(he.edge());
+    }
+
+    std::deque<Edge> edgesToCheck;
+    EdgeData<char> inQueue(geo.mesh, false);
+    for (Edge e : geo.mesh.edges()) {
+        edgesToCheck.push_back(e);
+        inQueue[e] = true;
+    }
+
     size_t nSplits = 0;
-    bool done      = false;
-    while (!done) {
-        done = true;
-        for (Edge e : geo.mesh.edges()) {
-            if (!edgeSamplePoints[e].empty() && !isDelaunay(e)) {
-                done = false;
+    while (!edgesToCheck.empty()) {
 
-                std::tie(newHe1, newHe2) = splitEdge(e);
+        // Get the top element from the queue of possibily non-Delaunay edges
+        Edge e = edgesToCheck.front();
+        edgesToCheck.pop_front();
+        inQueue[e] = false;
 
-                // Handle the aftermath of a flip
-                nSplits++;
+        if (!edgeSamplePoints[e].empty() && !isDelaunay(e)) {
+            size_t faceIndex     = originalFaceIndices[e.halfedge()];
+            size_t faceIndexTwin = originalFaceIndices[e.halfedge().twin()];
 
-                std::array<Edge, 6> neighEdges{
-                    newHe1.next().edge(),
-                    newHe1.next().next().edge(),
-                    newHe2.next().edge(),
-                    newHe2.twin().next().edge(),
-                    newHe2.twin().next().next().edge(),
-                    newHe1.twin().next().edge()};
+            my_assert((faceIndex != faceIndexTwin) || e.isBoundary(),
+                      "Edge should be between distinct faces");
+            my_assert(faceIndexTwin < edgesPerFace.size(),
+                      "faceIndexTwin too big");
 
-                flipFlatEdgesToDelaunay(neighEdges);
+            std::tie(newHe1, newHe2) = splitEdge(e);
 
-                eIdx = geo.mesh.getEdgeIndices();
+            originalFaceIndices[newHe1]        = faceIndex;
+            originalFaceIndices[newHe2]        = faceIndex;
+            originalFaceIndices[newHe1.twin()] = faceIndexTwin;
+            originalFaceIndices[newHe2.twin()] = faceIndexTwin;
+
+            edgesPerFace[faceIndex].insert(newHe1.edge());
+            edgesPerFace[faceIndex].insert(newHe2.edge());
+            edgesPerFace[faceIndex].insert(newHe1.next().edge());
+            edgesPerFace[faceIndexTwin].insert(newHe1.edge());
+            edgesPerFace[faceIndexTwin].insert(newHe2.edge());
+            edgesPerFace[faceIndexTwin].insert(newHe2.twin().next().edge());
+
+            // Handle the aftermath of a split
+            nSplits++;
+
+            std::set<Edge> faceEdges = edgesPerFace[faceIndex];
+            faceEdges.insert(edgesPerFace[faceIndexTwin].begin(),
+                             edgesPerFace[faceIndexTwin].end());
+
+            flipFlatEdgesToDelaunay(faceEdges);
+
+            eIdx = geo.mesh.getEdgeIndices();
+
+
+            for (Edge nE : faceEdges) {
+                if (!flatEdge[nE] && !inQueue[nE] && !isDelaunay(nE)) {
+                    edgesToCheck.push_back(nE);
+                    inQueue[nE] = true;
+                }
             }
         }
     }
 
-
     geo.refreshQuantities();
 
     double isOverallDelaunay = true;
-    EdgeData<double> edgeIsDelaunay(geo.mesh);
-    bool printed = false;
+    bool printedFlat         = false;
+    bool printedEssential    = false;
     for (Edge e : geo.mesh.edges()) {
         isOverallDelaunay = isOverallDelaunay && isDelaunay(e);
-        if (!printed && !isDelaunay(e)) {
+        if (!printedFlat && flatEdge[e] && !isDelaunay(e)) {
             cout << "Edge " << eIdx[e] << " is not Delaunay" << endl;
             cout << "It is " << (flatEdge[e] ? "" : "not ") << "flat" << endl;
             cout << "It has " << (edgeSamplePoints[e].empty() ? "no " : "some ")
                  << "sample points" << endl;
-            printed = true;
+            printedFlat = true;
         }
-        edgeIsDelaunay[e] = isDelaunay(e) ? 1 : -1;
+        if (!printedEssential && !flatEdge[e] && !isDelaunay(e)) {
+            cout << "Edge " << eIdx[e] << " is not Delaunay" << endl;
+            cout << "It is " << (flatEdge[e] ? "" : "not ") << "flat" << endl;
+            cout << "It has " << (edgeSamplePoints[e].empty() ? "no " : "some ")
+                 << "sample points" << endl;
+            printedEssential = true;
+        }
     }
 
     if (verbose) {
@@ -327,16 +386,23 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
 
     // ------------ e -------------->
     // -- newHe1 --> . --- newHe2 -->
-    Halfedge newHe2                 = geo.mesh.splitEdgeTriangular(e);
-    Halfedge newHe1                 = newHe2.next().next().twin().next().next();
+    my_assert(geo.mesh.isTriangular(), "Mesh not triangle");
+    Halfedge newHe2 = geo.mesh.splitEdgeTriangular(e);
+    my_assert(geo.mesh.isTriangular(), "Mesh not triangle (2)");
+    Halfedge newHe1 = newHe2.next().next().twin().next().next();
+
     edgeSamplePoints[newHe1.edge()] = firstHalfSamplePoints;
     edgeSamplePoints[newHe2.edge()] = secondHalfSamplePoints;
+
+    edgeSamplePoints[newHe1.next().edge()]        = std::vector<double>{};
+    edgeSamplePoints[newHe2.twin().next().edge()] = std::vector<double>{};
 
     flatEdge[newHe1.edge()] = false;
     flatEdge[newHe2.edge()] = false;
 
-    flatEdge[newHe1.next().edge()]            = true;
-    flatEdge[newHe2.twin().next().edge()]     = true;
+    flatEdge[newHe1.next().edge()]        = true;
+    flatEdge[newHe2.twin().next().edge()] = true;
+
     geo.inputVertexPositions[newHe2.vertex()] = newPos;
 
     // Only need a few angles here
