@@ -7,6 +7,10 @@ build_debug/
 .vscode
 *.swp
 tags
+'
+;
+\
+\\
 
 # Prerequisites
 *.d
