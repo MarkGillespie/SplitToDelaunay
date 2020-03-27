@@ -24,7 +24,18 @@ polyscope::SurfaceMesh* psMesh;
 // A user-defined callback, for creating control panels (etc)
 // Use ImGUI commands to build whatever you want here, see
 // https://github.com/ocornut/imgui/blob/master/imgui.h
-void myCallback() {}
+void myCallback() {
+    if (ImGui::Button("Split To Delaunay")) {
+        Splitter splitter(*geometry);
+        splitter.splitGeometry(true);
+
+        geometry->requireVertexPositions();
+        psMesh = polyscope::registerSurfaceMesh(
+            "Delaunay Mesh", geometry->vertexPositions,
+            mesh->getFaceVertexList(), polyscopePermutations(*mesh));
+        psMesh->setEdgeWidth(1);
+    }
+}
 
 int main(int argc, char** argv) {
     // print booleans as 'true' or 'false'
@@ -63,18 +74,8 @@ int main(int argc, char** argv) {
     std::tie(mesh, geometry) = loadMesh(filename);
 
     psMesh = polyscope::registerSurfaceMesh(
-        "original", geometry->inputVertexPositions, mesh->getFaceVertexList(),
-        polyscopePermutations(*mesh));
-    psMesh->setEnabled(false);
-
-    Splitter splitter(*geometry);
-    splitter.splitGeometry(true);
-
-    // Register the mesh with polyscope
-    psMesh = polyscope::registerSurfaceMesh(
-        polyscope::guessNiceNameFromPath(filename),
-        geometry->inputVertexPositions, mesh->getFaceVertexList(),
-        polyscopePermutations(*mesh));
+        "Original Mesh", geometry->inputVertexPositions,
+        mesh->getFaceVertexList(), polyscopePermutations(*mesh));
     psMesh->setEdgeWidth(1);
 
     // Give control to the polyscope gui
