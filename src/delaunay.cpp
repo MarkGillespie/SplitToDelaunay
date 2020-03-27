@@ -48,9 +48,70 @@ Splitter::Splitter(VertexPositionGeometry& geo_) : geo(geo_) {
     rho_e    = 2 * rho_v * s;
 
     flatEdge = EdgeData<char>(geo.mesh, false);
+
+    // Set default parent index to -1 so that newly created edges have parent
+    // index -1
+    parentIndex           = EdgeData<int>(geo.mesh, -1);
+    EdgeData<size_t> eIdx = geo.mesh.getEdgeIndices();
+    for (Edge e : geo.mesh.edges()) {
+        parentIndex[e] = eIdx[e];
+    }
 }
 
-std::vector<Edge> Splitter::flipFlatEdgesToDelaunay(std::set<Edge> edges) {
+void Splitter::flipAllFlatEdgesToDelaunay() {
+    std::deque<Edge> edgesToCheck;
+    EdgeData<char> inQueue(geo.mesh, false);
+    for (Edge e : geo.mesh.edges()) {
+        if (flatEdge[e]) {
+            edgesToCheck.push_back(e);
+            inQueue[e] = true;
+        }
+    }
+
+    while (!edgesToCheck.empty()) {
+
+        // Get the top element from the queue of possibily non-Delaunay edges
+        Edge e = edgesToCheck.front();
+        edgesToCheck.pop_front();
+        inQueue[e] = false;
+
+        if (!isDelaunay(e)) {
+            bool wasFlipped = geo.mesh.flip(e);
+
+            if (!wasFlipped) {
+                // cout << "Failed to flip :'(" << endl;
+                // edgesToCheck.push_back(e);
+                // inQueue[e] = true;
+            } else {
+                my_assert(isDelaunay(e), "It better be");
+
+                // Handle the aftermath of a flip
+
+                // Add neighbors to queue, as they may need flipping now
+                Halfedge he   = e.halfedge();
+                Halfedge heN  = he.next();
+                Halfedge heT  = he.twin();
+                Halfedge heTN = heT.next();
+                std::array<Edge, 4> neighEdges{heN.edge(), heN.next().edge(),
+                                               heTN.edge(), heTN.next().edge()};
+                for (Edge nE : neighEdges) {
+                    if (flatEdge[nE] && !inQueue[nE]) {
+                        edgesToCheck.push_back(nE);
+                        inQueue[nE] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    bool flatDelaunay = true;
+    for (Edge e : geo.mesh.edges()) {
+        flatDelaunay = flatDelaunay && (!flatEdge[e] || isDelaunay(e));
+    }
+    // my_assert(flatDelaunay, "????");
+}
+
+void Splitter::flipFlatEdgesToDelaunay(std::set<Edge> edges) {
     std::deque<Edge> edgesToCheck;
     EdgeData<char> inQueue(geo.mesh, false);
     for (Edge e : edges) {
@@ -60,10 +121,6 @@ std::vector<Edge> Splitter::flipFlatEdgesToDelaunay(std::set<Edge> edges) {
         }
     }
 
-    std::vector<Edge> brokenEdges;
-    EdgeData<char> inReturnList(geo.mesh, false);
-
-    my_assert(geo.mesh.isTriangular(), "Mesh not triangle");
     while (!edgesToCheck.empty()) {
 
         // Get the top element from the queue of possibily non-Delaunay edges
@@ -89,39 +146,27 @@ std::vector<Edge> Splitter::flipFlatEdgesToDelaunay(std::set<Edge> edges) {
                 if (flatEdge[nE] && !inQueue[nE]) {
                     edgesToCheck.push_back(nE);
                     inQueue[nE] = true;
-                } else if (!flatEdge[nE] && !inReturnList[nE] &&
-                           !isDelaunay(nE)) {
-                    brokenEdges.push_back(nE);
-                    inReturnList[nE] = true;
                 }
             }
         }
     }
-    my_assert(geo.mesh.isTriangular(), "Mesh not triangle");
-
-    // geo.refreshQuantities();
-
-    return brokenEdges;
 }
 
-void Splitter::splitGeometry(bool verbose) {
+EdgeData<int> Splitter::splitGeometry(bool verbose) {
     Halfedge newHe1, newHe2;
 
-    EdgeData<size_t> eIdx = geo.mesh.getEdgeIndices();
-
-    HalfedgeData<size_t> originalFaceIndices(geo.mesh);
+    HalfedgeData<int> originalFaceIndices(geo.mesh);
     std::vector<std::set<Edge>> edgesPerFace(geo.mesh.nFaces(),
                                              std::set<Edge>{});
 
-    // TODO: handle boundaries for real?
     FaceData<size_t> fIdx = geo.mesh.getFaceIndices();
     for (Halfedge he : geo.mesh.halfedges()) {
         if (he.isInterior()) {
             originalFaceIndices[he] = fIdx[he.face()];
+            edgesPerFace[originalFaceIndices[he]].insert(he.edge());
         } else {
-            originalFaceIndices[he] = fIdx[he.twin().face()];
+            originalFaceIndices[he] = -1;
         }
-        edgesPerFace[originalFaceIndices[he]].insert(he.edge());
     }
 
     std::deque<Edge> edgesToCheck;
@@ -139,43 +184,65 @@ void Splitter::splitGeometry(bool verbose) {
         edgesToCheck.pop_front();
         inQueue[e] = false;
 
-        // if (!edgeSamplePoints[e].empty() && !isDelaunay(e)) {
         // TODO: This doesn't quite do the length constraints properly
         if (geo.edgeLength(e) >= 2 * rho_e && !isDelaunay(e)) {
-            size_t faceIndex     = originalFaceIndices[e.halfedge()];
-            size_t faceIndexTwin = originalFaceIndices[e.halfedge().twin()];
+            int faceIndex     = originalFaceIndices[e.halfedge()];
+            int faceIndexTwin = originalFaceIndices[e.halfedge().twin()];
 
-            my_assert((faceIndex != faceIndexTwin) || e.isBoundary(),
+            my_assert(faceIndex != faceIndexTwin,
                       "Edge should be between distinct faces");
-            my_assert(faceIndexTwin < edgesPerFace.size(),
+            my_assert(faceIndexTwin < (int)edgesPerFace.size(),
                       "faceIndexTwin too big");
+            if (faceIndex >= 0 != e.halfedge().isInterior()) {
+                cout << "faceIndex: " << faceIndex
+                     << "\ttwinFaceIndex: " << faceIndexTwin
+                     << "\ttwin isInterior: "
+                     << e.halfedge().twin().isInterior()
+                     << "\tmy isInterior: " << e.halfedge().isInterior()
+                     << endl;
+            }
+            my_assert((faceIndex >= 0) == e.halfedge().isInterior(),
+                      "face index messed up");
+            my_assert((faceIndexTwin >= 0) == e.halfedge().twin().isInterior(),
+                      "face index messed up");
 
+            // Split the edge
             std::tie(newHe1, newHe2) = splitEdge(e);
 
+            // Handle the aftermath of a split
+            nSplits++;
+
+            // Update parent face pointers
             originalFaceIndices[newHe1]        = faceIndex;
             originalFaceIndices[newHe2]        = faceIndex;
             originalFaceIndices[newHe1.twin()] = faceIndexTwin;
             originalFaceIndices[newHe2.twin()] = faceIndexTwin;
 
-            edgesPerFace[faceIndex].insert(newHe1.edge());
-            edgesPerFace[faceIndex].insert(newHe2.edge());
-            edgesPerFace[faceIndex].insert(newHe1.next().edge());
-            edgesPerFace[faceIndexTwin].insert(newHe1.edge());
-            edgesPerFace[faceIndexTwin].insert(newHe2.edge());
-            edgesPerFace[faceIndexTwin].insert(newHe2.twin().next().edge());
+            // Add new edges to the appropriate face lists, and
+            // identify the edges that lie in the faces of the original mesh
+            // which are incident on edge e
+            std::set<Edge> faceEdges;
+            if (faceIndex >= 0) {
+                edgesPerFace[faceIndex].insert(newHe1.edge());
+                edgesPerFace[faceIndex].insert(newHe2.edge());
+                edgesPerFace[faceIndex].insert(newHe1.next().edge());
 
-            // Handle the aftermath of a split
-            nSplits++;
+                faceEdges.insert(edgesPerFace[faceIndex].begin(),
+                                 edgesPerFace[faceIndex].end());
+            }
+            if (faceIndexTwin >= 0) {
+                edgesPerFace[faceIndexTwin].insert(newHe1.edge());
+                edgesPerFace[faceIndexTwin].insert(newHe2.edge());
+                edgesPerFace[faceIndexTwin].insert(newHe2.twin().next().edge());
 
-            std::set<Edge> faceEdges = edgesPerFace[faceIndex];
-            faceEdges.insert(edgesPerFace[faceIndexTwin].begin(),
-                             edgesPerFace[faceIndexTwin].end());
+                faceEdges.insert(edgesPerFace[faceIndexTwin].begin(),
+                                 edgesPerFace[faceIndexTwin].end());
+            }
 
+            // Flip any flippable edges to Delaunay and push non-Delaunay
+            // non-flippable edges onto the queue
             flipFlatEdgesToDelaunay(faceEdges);
-
-            eIdx = geo.mesh.getEdgeIndices();
-
-
+            // flipAllFlatEdgesToDelaunay();
             for (Edge nE : faceEdges) {
                 if (!flatEdge[nE] && !inQueue[nE] && !isDelaunay(nE)) {
                     edgesToCheck.push_back(nE);
@@ -187,24 +254,38 @@ void Splitter::splitGeometry(bool verbose) {
 
     geo.refreshQuantities();
 
+    EdgeData<size_t> eIdx = geo.mesh.getEdgeIndices();
+
     double isOverallDelaunay = true;
     bool printedFlat         = false;
     bool printedEssential    = false;
+
+    size_t nFlatBad          = 0;
+    size_t nFlatBadFlippable = 0;
     for (Edge e : geo.mesh.edges()) {
         isOverallDelaunay = isOverallDelaunay && isDelaunay(e);
         if (!printedFlat && flatEdge[e] && !isDelaunay(e)) {
             cout << "Edge " << eIdx[e] << " is not Delaunay" << endl;
-            cout << "It is " << (flatEdge[e] ? "" : "not ") << "flat" << endl;
-            cout << "It is " << (geo.edgeLength(e) >= 2 * rho_e ? "" : "not ")
-                 << "long enough to split" << endl;
+            cout << "It is flat" << endl;
+            bool flippable = geo.mesh.flip(e);
+            geo.mesh.flip(e);
+            cout << "It was " << (flippable ? "" : "not ") << "flippable"
+                 << endl;
             printedFlat = true;
         }
         if (!printedEssential && !flatEdge[e] && !isDelaunay(e)) {
             cout << "Edge " << eIdx[e] << " is not Delaunay" << endl;
-            cout << "It is " << (flatEdge[e] ? "" : "not ") << "flat" << endl;
+            cout << "It is not flat" << endl;
             cout << "It is " << (geo.edgeLength(e) >= 2 * rho_e ? "" : "not ")
                  << "long enough to split" << endl;
             printedEssential = true;
+        }
+        if (flatEdge[e] && !isDelaunay(e)) {
+            nFlatBad += 1;
+            if (geo.mesh.flip(e)) {
+                nFlatBadFlippable += 1;
+                geo.mesh.flip(e);
+            }
         }
     }
 
@@ -212,7 +293,14 @@ void Splitter::splitGeometry(bool verbose) {
         cout << "Finished splitting to delaunay. Used " << nSplits
              << " splits. Mesh is" << (isOverallDelaunay ? "" : " not")
              << " Delaunay" << endl;
+
+        if (!isOverallDelaunay) {
+            cout << "# non-delaunay flat edges: " << nFlatBad << "\t of those, "
+                 << nFlatBadFlippable << " are flippable" << endl;
+        }
     }
+
+    return parentIndex;
 }
 
 // Positions of "Delaunay sampling points" along this edge
@@ -330,17 +418,20 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
 
 
     // Compute new vertex position before splitting e
-    Vector3 p2     = geo.inputVertexPositions[e.halfedge().vertex()];
-    Vector3 p0     = geo.inputVertexPositions[e.halfedge().twin().vertex()];
-    Vector3 newPos = splitBary * p2 + (1 - splitBary) * p0;
+    Vector3 p2         = geo.inputVertexPositions[e.halfedge().vertex()];
+    Vector3 p0         = geo.inputVertexPositions[e.halfedge().twin().vertex()];
+    Vector3 newPos     = splitBary * p2 + (1 - splitBary) * p0;
+    int oldParentIndex = parentIndex[e];
 
     // ------------ e -------------->
     // -- newHe1 --> . --- newHe2 -->
     Halfedge newHe2 = geo.mesh.splitEdgeTriangular(e);
     Halfedge newHe1 = newHe2.next().next().twin().next().next();
 
-    flatEdge[newHe1.edge()] = false;
-    flatEdge[newHe2.edge()] = false;
+    flatEdge[newHe1.edge()]    = false;
+    flatEdge[newHe2.edge()]    = false;
+    parentIndex[newHe1.edge()] = oldParentIndex;
+    parentIndex[newHe2.edge()] = oldParentIndex;
 
     flatEdge[newHe1.next().edge()]        = true;
     flatEdge[newHe2.twin().next().edge()] = true;
@@ -352,53 +443,7 @@ std::pair<Halfedge, Halfedge> Splitter::splitEdge(Edge e) {
 
 // Finds the interval that you should split in
 Interval Splitter::computeSplitInterval(Edge e) {
-
-    /*
-     *  v5_____________v1___________ v4
-     *    \           / \           /
-     *     \         /   \         /
-     *      \   D   /     \   C   /
-     *       \     /   A   \     /
-     *        \   /         \   /
-     *         \ /           \ /
-     *        v2 ----- e --->-  v0
-     *         / \           / \
-     *        /   \         /   \
-     *       /     \   B   /     \
-     *      /   E   \     /   F   \
-     *     /         \   /         \
-     *    /___________\ /___________\
-     *   v6           v3             v7
-     */
-    std::array<Vector2, 8> v = layOutButterfly(e);
-
-    Interval cInt     = diskInterval(circumcenter(v[0], v[4], v[1]));
-    Interval dInt     = diskInterval(circumcenter(v[5], v[2], v[1]));
-    Interval eInt     = diskInterval(circumcenter(v[3], v[2], v[6]));
-    Interval fInt     = diskInterval(circumcenter(v[3], v[7], v[0]));
-    Interval leftInt  = diskInterval(circumcenter(v[1], v[2], v[3]));
-    Interval rightInt = diskInterval(circumcenter(v[0], v[1], v[3]));
-
-    // Floating point might mess up interval endpoints. We fix them here
-    // Note that it's possible that e.g. cInt has v0 as its left endpoint rather
-    // than the right endpoint as I assume here That's okay, since I only care
-    // about the intersection of cInt with the edge, which is empty in that case
-    // anyway
-    cInt.second = v[0].x;
-    dInt.first  = v[2].x;
-    eInt.first  = v[2].x;
-    fInt.second = v[0].x;
-
-    // I1 ... I4 are the complements of the circumcircle intervals
-    Interval Iedge = std::make_pair(0, v[0].x);
-    std::array<Interval, 5> I{intersect(leftInt, rightInt),
-                              complement(cInt, Iedge), complement(dInt, Iedge),
-                              complement(eInt, Iedge), complement(fInt, Iedge)};
-    // I[0] is guaranteed not to be empty, but sometimes it's just a single
-    // point. Here, we widen it slightly so that it doesn't fail tests later
-    if (empty(I[0])) {
-        I[0] = std::make_pair(leftInt.second - 1e-6, rightInt.first + 1e-6);
-    }
+    std::array<Interval, 5> I = computeInteriorIntervals(e);
 
     Interval bestIntersector =
         intersectIndices(std::vector<size_t>{0, 1, 2, 3, 4}, I);
@@ -414,51 +459,7 @@ Interval Splitter::computeSplitInterval(Edge e) {
 }
 
 Interval Splitter::computeBoundarySplitInterval(Edge e) {
-    /*
-     *  v4_____________v1___________ v3
-     *    \           / \           /
-     *     \         /   \         /
-     *      \   D   /     \   C   /
-     *       \     /   A   \     /
-     *        \   /         \   /
-     *         \ /           \ /
-     *        v2 ----- e --->-  v0
-     */
-    std::array<Vector2, 5> v = layOutCroissant(e);
-
-    Interval cInt = diskInterval(circumcenter(v[0], v[3], v[1]));
-    Interval dInt = diskInterval(circumcenter(v[4], v[2], v[1]));
-
-    // The left and right intervals work differently now
-    // LeftInt goes from v2 to the point on e where a line perpendicular to
-    // v2-v1 coming from v1 would intersect it
-    Vector2 e21 = v[1] - v[2];
-    Vector2 e21Perp{e21.y, -e21.x};
-    e21Perp *= e21.y / -e21Perp.y;
-    Vector2 intervalVec = e21 + e21Perp;
-    my_assert(abs(intervalVec.y) < 1e-8,
-              "You did some algebra wrong. This vector should lie along edge e "
-              "(the x axis)");
-    Interval leftInt = std::make_pair(0, intervalVec.x);
-
-    Vector2 e01 = v[1] - v[2];
-    Vector2 e01Perp{-e01.y, e01.x};
-    e01Perp *= e01.y / -e01Perp.y;
-    intervalVec = e01 + e01Perp;
-    my_assert(abs(intervalVec.y) < 1e-8,
-              "You did some algebra wrong. This vector should lie along edge e "
-              "(the x axis)");
-    Interval rightInt = std::make_pair(intervalVec.x, v[0].x);
-
-    Interval Iedge = std::make_pair(0, v[0].x);
-    std::array<Interval, 3> I{intersect(leftInt, rightInt),
-                              complement(cInt, Iedge), complement(dInt, Iedge)};
-
-    // I[0] is guaranteed not to be empty, but sometimes it's just a single
-    // point. Here, we widen it slightly so that it doesn't fail tests later
-    if (empty(I[0])) {
-        I[0] = std::make_pair(leftInt.second - 1e-6, rightInt.first + 1e-6);
-    }
+    std::array<Interval, 3> I = computeBoundaryIntervals(e);
 
     Interval bestIntersection = intersect(I[0], intersect(I[1], I[2]));
     if (empty(bestIntersection)) {
@@ -474,7 +475,8 @@ Interval Splitter::computeBoundarySplitInterval(Edge e) {
         } else if (empty(intersectD)) {
             return intersectC;
         } else {
-            double midPt = v[0].x / 2;
+            double len   = geo.edgeLength(e);
+            double midPt = len / 2;
             double cDist = distTo(intersectC, midPt);
             double dDist = distTo(intersectD, midPt);
             if (cDist <= dDist) {
@@ -488,7 +490,9 @@ Interval Splitter::computeBoundarySplitInterval(Edge e) {
     }
 }
 
-bool Splitter::isDelaunay(Edge e) { return geo.edgeCotanWeight(e) > -1e-12; }
+bool Splitter::isDelaunay(Edge e) {
+    return e.isBoundary() || geo.edgeCotanWeight(e) > -1e-12;
+}
 
 bool Splitter::empty(Interval i) {
     return (i.first >= i.second) || std::isnan(i.first) || std::isnan(i.second);
@@ -573,6 +577,245 @@ Disk Splitter::circumcenter(Vector2 v1, Vector2 v2, Vector2 v3) {
 
     double circumradius = (v1 - circumcenter).norm();
     return std::make_pair(circumcenter, circumradius);
+}
+
+
+/*
+ *  v5_____________v1___________ v4
+ *    \           / \           /
+ *     \         /   \         /
+ *      \   D   /     \   C   /
+ *       \     /   A   \     /
+ *        \   /         \   /
+ *         \ /           \ /
+ *        v2 ----- e --->-  v0
+ *         / \           / \
+ *        /   \         /   \
+ *       /     \   B   /     \
+ *      /   E   \     /   F   \
+ *     /         \   /         \
+ *    /___________\ /___________\
+ *   v6           v3             v7
+ */
+// Compute the intervals corresponding to the circumdisks of
+// triangles in the neighborhood, but not incident on edge e (Triangles C,
+// D, E, F) in the butterfly
+// Some of these triangles might not exist of A or B are boundary faces
+std::array<Interval, 5> Splitter::computeInteriorIntervals(Edge e) {
+    std::array<Interval, 5> intervals;
+    std::array<Vector2, 8> v; // Vertex positions
+
+    double lAB     = geo.edgeLength(e);
+    double lAD     = geo.edgeLength(e.halfedge().next().next().edge());
+    double lBE     = geo.edgeLength(e.halfedge().twin().next().edge());
+    double thetaA0 = geo.cornerAngle(e.halfedge().next().corner());
+    double thetaA2 = geo.cornerAngle(e.halfedge().corner());
+    double thetaB0 = geo.cornerAngle(e.halfedge().twin().corner());
+    double thetaB2 = geo.cornerAngle(e.halfedge().twin().next().corner());
+
+    v[0] = Vector2{lAB, 0};
+    v[1] = Vector2{cos(thetaA2), sin(thetaA2)} * lAD;
+    v[2] = Vector2{0, 0};
+    v[3] = Vector2{cos(thetaB2), -sin(thetaB2)} * lBE;
+
+    Interval leftInt  = diskInterval(circumcenter(v[1], v[2], v[3]));
+    Interval rightInt = diskInterval(circumcenter(v[0], v[1], v[3]));
+    intervals[0]      = intersect(leftInt, rightInt);
+
+    // intervals[0] is guaranteed not to be empty, but sometimes it's just a
+    // single point. Here, we widen it slightly so that it doesn't fail tests
+    // later
+    if (empty(intervals[0])) {
+        intervals[0] =
+            std::make_pair(leftInt.second - 1e-6, rightInt.first + 1e-6);
+    }
+
+    Interval edgeInt = std::make_pair(v[2].x, v[0].x);
+    if (e.halfedge().next().twin().isInterior()) {
+        // Face C interior face
+        double lCdiag =
+            geo.edgeLength(e.halfedge().next().twin().next().edge());
+        double thetaC0 =
+            geo.cornerAngle(e.halfedge().next().twin().next().corner());
+        v[4] = v[0] + Vector2{cos(M_PI - thetaC0 - thetaA0),
+                              sin(M_PI - thetaC0 - thetaA0)} *
+                          lCdiag;
+        intervals[1] = diskInterval(circumcenter(v[0], v[4], v[1]));
+    } else {
+        intervals[1] = std::make_pair(1, -1);
+    }
+    if (e.halfedge().next().next().twin().isInterior()) {
+        // Face D interior face
+        double lDdiag = geo.edgeLength(
+            e.halfedge().next().next().twin().next().next().edge());
+        double thetaD2 =
+            geo.cornerAngle(e.halfedge().next().next().twin().corner());
+        v[5] = Vector2{cos(thetaA2 + thetaD2), sin(thetaA2 + thetaD2)} * lDdiag;
+        intervals[2] = diskInterval(circumcenter(v[2], v[1], v[5]));
+    } else {
+        intervals[2] = std::make_pair(1, -1);
+    }
+    if (e.halfedge().twin().next().twin().isInterior()) {
+        // Face E interior face
+        double lEdiag =
+            geo.edgeLength(e.halfedge().twin().next().twin().next().edge());
+        double thetaE2 =
+            geo.cornerAngle(e.halfedge().twin().next().twin().next().corner());
+        v[6] =
+            Vector2{cos(thetaB2 + thetaE2), -sin(thetaB2 + thetaE2)} * lEdiag;
+        intervals[3] = diskInterval(circumcenter(v[6], v[3], v[2]));
+    } else {
+        intervals[3] = std::make_pair(1, -1);
+    }
+    if (e.halfedge().twin().next().next().twin().isInterior()) {
+        // Face F interior face
+        double lFdiag = geo.edgeLength(
+            e.halfedge().twin().next().next().twin().next().next().edge());
+        double thetaF0 =
+            geo.cornerAngle(e.halfedge().twin().next().next().twin().corner());
+        v[7] = v[0] + Vector2{cos(M_PI - thetaF0 - thetaB0),
+                              -sin(M_PI - thetaF0 - thetaB0)} *
+                          lFdiag;
+        intervals[4] = diskInterval(circumcenter(v[7], v[0], v[3]));
+    } else {
+        intervals[4] = std::make_pair(1, -1);
+    }
+
+
+    // The intervals we computed so far were the intersections of circumdisks
+    // with the edge
+    // For all except the first interval, we now have to take their complement
+    // in the edge
+
+    Interval Iedge = std::make_pair(0, v[0].x);
+
+    // Floating point might mess up interval endpoints. We fix them here
+    // Note that it's possible that e.g. cInt has v0 as its left endpoint rather
+    // than the right endpoint as I assume here That's okay, since I only care
+    // about the intersection of cInt with the edge, which is empty in that case
+    // anyway
+    intervals[1].second = v[0].x;
+    intervals[2].first  = v[2].x;
+    intervals[3].first  = v[2].x;
+    intervals[4].second = v[0].x;
+
+    intervals[1] = complement(intervals[1], Iedge);
+    intervals[2] = complement(intervals[2], Iedge);
+    intervals[3] = complement(intervals[3], Iedge);
+    intervals[4] = complement(intervals[4], Iedge);
+
+    return intervals;
+}
+
+/*
+ *
+ *  v4_____________v1___________ v3
+ *    \           / \           /
+ *     \         /   \         /
+ *      \   D   /     \   C   /
+ *       \     /   A   \     /
+ *        \   /         \   /
+ *         \ /           \ /
+ *        v2 ----- e --->-  v0
+ *  I refer to edges by the adjacent faces. E.g. e is edge AB
+ *     For edges on the boundary, I never use the top and
+ *     bottom edges, so I just refer to them by face.
+ *     E.g. edge Ddiag is the left edge of face D.
+ *  I refer to corners by the face and vertex. E.g. corner A2
+ *     is the corner at the base of edge e in face A
+ */
+std::array<Interval, 3> Splitter::computeBoundaryIntervals(Edge e) {
+    std::array<Interval, 3> intervals;
+    std::array<Vector2, 5> v; // Vertex positions
+
+    double lAB     = geo.edgeLength(e);
+    double lAD     = geo.edgeLength(e.halfedge().next().next().edge());
+    double lBE     = geo.edgeLength(e.halfedge().twin().next().edge());
+    double thetaA0 = geo.cornerAngle(e.halfedge().next().corner());
+    double thetaA2 = geo.cornerAngle(e.halfedge().corner());
+
+    v[0] = Vector2{lAB, 0};
+    v[1] = Vector2{cos(thetaA2), sin(thetaA2)} * lAD;
+    v[2] = Vector2{0, 0};
+
+    // The left and right intervals work differently now
+    // LeftInt goes from v2 to the point on e where a line perpendicular to
+    // v2-v1 coming from v1 would intersect it
+    Vector2 e21 = v[1] - v[2];
+    Vector2 e21Perp{e21.y, -e21.x};
+    e21Perp *= e21.y / -e21Perp.y;
+    Vector2 intervalVec = e21 + e21Perp;
+    my_assert(abs(intervalVec.y) < 1e-8,
+              "You did some algebra wrong. This vector should lie along edge e "
+              "(the x axis)");
+    Interval leftInt = std::make_pair(0, intervalVec.x);
+
+    Vector2 e01 = v[1] - v[2];
+    Vector2 e01Perp{-e01.y, e01.x};
+    e01Perp *= e01.y / -e01Perp.y;
+    intervalVec = e01 + e01Perp;
+    my_assert(abs(intervalVec.y) < 1e-8,
+              "You did some algebra wrong. This vector should lie along edge e "
+              "(the x axis)");
+    Interval rightInt = std::make_pair(intervalVec.x, v[0].x);
+
+    intervals[0] = intersect(leftInt, rightInt);
+
+    // intervals[0] is guaranteed not to be empty, but sometimes it's just a
+    // single point. Here, we widen it slightly so that it doesn't fail tests
+    // later
+    if (empty(intervals[0])) {
+        intervals[0] =
+            std::make_pair(leftInt.second - 1e-6, rightInt.first + 1e-6);
+    }
+
+    if (e.halfedge().next().twin().isInterior()) {
+        // Face C is a real face
+        double lCdiag =
+            geo.edgeLength(e.halfedge().next().twin().next().edge());
+        double thetaC0 =
+            geo.cornerAngle(e.halfedge().next().twin().next().corner());
+
+        v[3] = v[0] + Vector2{cos(M_PI - thetaC0 - thetaA0),
+                              sin(M_PI - thetaC0 - thetaA0)} *
+                          lCdiag;
+        intervals[1] = diskInterval(circumcenter(v[0], v[3], v[1]));
+    } else {
+        intervals[1] = std::make_pair(1, -1);
+    }
+
+
+    if (e.halfedge().next().twin().isInterior()) {
+        // Face D is a real face
+        double lDdiag = geo.edgeLength(
+            e.halfedge().next().next().twin().next().next().edge());
+        double thetaD2 =
+            geo.cornerAngle(e.halfedge().next().next().twin().corner());
+        v[4] = Vector2{cos(thetaA2 + thetaD2), sin(thetaA2 + thetaD2)} * lDdiag;
+        intervals[2] = diskInterval(circumcenter(v[2], v[1], v[4]));
+    } else {
+        intervals[2] = std::make_pair(1, -1);
+    }
+
+    // The intervals we computed so far were the intersections of circumdisks
+    // with the edge
+    // For all except the first interval, we now have to take their complement
+    // in the edge
+
+    Interval Iedge = std::make_pair(0, v[0].x);
+
+    // Floating point might mess up interval endpoints. We fix them here
+    // Note that it's possible that e.g. cInt has v0 as its left endpoint rather
+    // than the right endpoint as I assume here That's okay, since I only care
+    // about the intersection of cInt with the edge, which is empty in that case
+    // anyway
+    intervals[1].second = v[0].x;
+    intervals[2].first  = v[2].x;
+
+    intervals[1] = complement(intervals[1], Iedge);
+    intervals[2] = complement(intervals[2], Iedge);
+
+    return intervals;
 }
 
 /*

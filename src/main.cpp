@@ -27,6 +27,8 @@ polyscope::SurfaceMesh* psMesh;
 void myCallback() {}
 
 int main(int argc, char** argv) {
+    // print booleans as 'true' or 'false'
+    std::cout << std::boolalpha;
 
     // Configure the argument parser
     args::ArgumentParser parser("Geometry program");
@@ -74,6 +76,7 @@ int main(int argc, char** argv) {
         geometry->inputVertexPositions, mesh->getFaceVertexList(),
         polyscopePermutations(*mesh));
     psMesh->setEdgeWidth(1);
+    psMesh->addEdgeScalarQuantity("Delaunay", isDelaunay);
 
     // Give control to the polyscope gui
     polyscope::show();

@@ -38,14 +38,21 @@ using Disk     = std::pair<Vector2, double>;
 class Splitter {
   public:
     Splitter(VertexPositionGeometry& geo_);
-    void splitGeometry(bool verbose = false);
 
-    std::vector<Edge> flipFlatEdgesToDelaunay(std::set<Edge> edges);
+    // Make the input geometry Delaunay using edge splits
+    // Return which edge of the original mesh each edge lies on
+    // New edges which split faces (and thus do not lie on any original mesh
+    // edge) have value -1
+    EdgeData<int> splitGeometry(bool verbose = false);
+
+    void flipFlatEdgesToDelaunay(std::set<Edge> edges);
+    void flipAllFlatEdgesToDelaunay();
 
     VertexPositionGeometry& geo;
     double rho_v, rho_e;
     EdgeData<std::vector<double>> edgeSamplePoints;
     EdgeData<char> flatEdge;
+    EdgeData<int> parentIndex;
 
     std::pair<Halfedge, Halfedge> splitEdge(Edge e);
 
@@ -74,6 +81,33 @@ class Splitter {
     static Interval diskInterval(Disk disk);
     static Disk circumcenter(Vector2 v1, Vector2 v2, Vector2 v3);
     std::vector<double> edgePoints(Edge e);
+
+
+    /*
+     *  v5_____________v1___________ v4
+     *    \           / \           /
+     *     \         /   \         /
+     *      \   D   /     \   C   /
+     *       \     /   A   \     /
+     *        \   /         \   /
+     *         \ /           \ /
+     *        v2 ----- e --->-  v0
+     *         / \           / \
+     *        /   \         /   \
+     *       /     \   B   /     \
+     *      /   E   \     /   F   \
+     *     /         \   /         \
+     *    /___________\ /___________\
+     *   v6           v3             v7
+     */
+    // Compute the intervals corresponding to the circumdisks of
+    // triangles in the neighborhood, but not incident on edge e (Triangles C,
+    // D, E, F) in the butterfly
+    // Some of these triangles might not exist of A or B are boundary faces
+    // In that case, I give empty intervals
+    std::array<Interval, 5> computeInteriorIntervals(Edge e);
+    std::array<Interval, 3> computeBoundaryIntervals(Edge e);
+
     std::array<Vector2, 8> layOutButterfly(Edge e);
     std::array<Vector2, 5> layOutCroissant(Edge e);
 };
