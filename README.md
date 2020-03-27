@@ -1,18 +1,26 @@
-# GeometryTemplate
-A template project to get started with geometry-central and Polyscope. Copied from Nick's template [here](https://github.com/nmwsharp/gc-polyscope-project-template), but with code for googletest added in.
+# Split To Delaunay
 
-This repo is set up as a template, but it seems the submodules don't get copied to the new project. Run `setup.sh` to set up the required submodules and to run cmake. Setup also sets up cmake to export compile commands for `clang-format`. To build the code, you can run
+This is a rough implementation of the Delaunay edge split algorithm presented in [Efficient construction and simplification of Delaunay meshes](https://dl.acm.org/doi/10.1145/2816795.2818076) by Yong-Jin Liu, Chunxu  Xu, Dian  Fan, and Ying He. It takes in a triangle mesh and then performs edge splits to make the mesh Delaunay.
+
+|![Original Mesh](images/original_bunny.png "Original Mesh")|![Delaunay Mesh](images/delaunay_bunny.png "Delaunay Mesh")|
+|:----:|:-----:|
+|Original Mesh|Delaunay Mesh|
+
+
+This repo uses submodules. To clone it along with the submodules, run `git clone --recursive https://github.com/MarkGillespie/SplitToDelaunay.git`. To build the code, make a `build` directory in the main folder. Then run 
 ```
 cd build
+cmake ..
 make -j7
 ```
+Run the code with
 
 Then run the code with
 ```
 bin/run /path/to/a/mesh
 ```
 
-Run the tests with
+You can run the tests with
 ```
 bin/test
 ```
