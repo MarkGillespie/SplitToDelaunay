@@ -6,7 +6,7 @@
 #include "polyscope/polyscope.h"
 #include "polyscope/surface_mesh.h"
 
-#include "delaunay.h"
+#include "Splitter.h"
 
 #include "args/args.hxx"
 #include "imgui.h"
@@ -76,7 +76,6 @@ int main(int argc, char** argv) {
         geometry->inputVertexPositions, mesh->getFaceVertexList(),
         polyscopePermutations(*mesh));
     psMesh->setEdgeWidth(1);
-    psMesh->addEdgeScalarQuantity("Delaunay", isDelaunay);
 
     // Give control to the polyscope gui
     polyscope::show();

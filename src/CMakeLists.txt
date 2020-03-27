@@ -13,8 +13,10 @@ add_library(
 
 add_library(
   splitter
-  delaunay.h
-  delaunay.cpp
+  Splitter.h
+  Splitter.cpp
+  Interval.h
+  Interval.cpp
   )
 target_link_libraries(splitter geometry-central polyscope my_assert)
 
